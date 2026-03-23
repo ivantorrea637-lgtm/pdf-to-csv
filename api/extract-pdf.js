@@ -42,7 +42,10 @@ function extractJsonArray(text) {
 }
 
 function parseForm(req) {
-  const form = formidable({ multiples: true, keepExtensions: true });
+  const form = formidable({
+    multiples: true,
+    keepExtensions: true,
+  });
 
   return new Promise((resolve, reject) => {
     form.parse(req, (err, fields, files) => {
@@ -95,30 +98,43 @@ No uses texto adicional.
 
 Nombre del archivo: ${fileName}`;
 
-  const response = await client.responses.create({
-    model: "gpt-4o",
-    input: [
-      {
-        role: "user",
-        content: [
+  let lastError;
+
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const response = await client.responses.create({
+        model: "gpt-4.1",
+        input: [
           {
-            type: "input_file",
-            file_id: fileId,
-          },
-          {
-            type: "input_text",
-            text: prompt,
+            role: "user",
+            content: [
+              {
+                type: "input_file",
+                file_id: fileId,
+              },
+              {
+                type: "input_text",
+                text: prompt,
+              },
+            ],
           },
         ],
-      },
-    ],
-    reasoning: { effort: "medium" },
-    max_output_tokens: 2200,
-  });
+        max_output_tokens: 2200,
+      });
 
-  console.log("OPENAI OUTPUT:", response.output_text || "");
+      console.log("OPENAI OUTPUT:", response.output_text || "");
+      return extractJsonArray(response.output_text || "");
+    } catch (error) {
+      lastError = error;
+      console.error(`Intento ${attempt} fallido:`, error?.message || error);
 
-  return extractJsonArray(response.output_text || "");
+      if (attempt < 3) {
+        await new Promise((resolve) => setTimeout(resolve, 2000 * attempt));
+      }
+    }
+  }
+
+  throw new Error(lastError?.message || "OpenAI falló después de 3 intentos.");
 }
 
 export default async function handler(req, res) {
@@ -186,7 +202,7 @@ export default async function handler(req, res) {
         details.push({
           file: file.originalFilename || "archivo",
           ok: false,
-          error: error.message,
+          error: error.message || "Error desconocido al procesar el PDF.",
         });
       }
     }
