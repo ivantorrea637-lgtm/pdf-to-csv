@@ -1,0 +1,29 @@
+<!doctype html>
+<html>
+  <body>
+    <h1>PDF → CSV</h1>
+    <input type="file" id="file" multiple />
+    <button onclick="upload()">Procesar</button>
+
+    <script>
+      async function upload() {
+        const files = document.getElementById("file").files;
+        const formData = new FormData();
+
+        for (let f of files) {
+          formData.append("files", f);
+        }
+
+        const res = await fetch("/api/extract-pdf", {
+          method: "POST",
+          body: formData
+        });
+
+        const data = await res.json();
+
+        console.log(data);
+        alert("Listo. Revisa consola o descarga CSV.");
+      }
+    </script>
+  </body>
+</html>
