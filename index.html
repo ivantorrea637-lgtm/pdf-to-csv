@@ -115,9 +115,19 @@
           let msg = `Listo. Registros extraídos: ${extractedRows.length}`;
 
           if (data.details && data.details.length) {
-            msg += "\n\nDetalles:\n" + data.details.map(d =>
-              `${d.file}: ${d.ok ? `${d.rows} fila(s)` : `ERROR - ${d.error}`}`
-            ).join("\n");
+            msg += "\n\nDetalles:\n" + data.details.map(d => {
+              if (!d.ok) {
+                return `${d.file}: ERROR - ${d.error}`;
+              }
+
+              let line = `${d.file}: ${d.rows} fila(s)`;
+
+              if (d.rows === 0 && d.preview) {
+                line += `\nVista previa detectada: ${d.preview}`;
+              }
+
+              return line;
+            }).join("\n\n");
           }
 
           document.getElementById("status").textContent = msg;
