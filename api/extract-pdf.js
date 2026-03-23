@@ -96,7 +96,7 @@ No uses texto adicional.
 Nombre del archivo: ${fileName}`;
 
   const response = await client.responses.create({
-    model: "gpt-5.4",
+    model: "gpt-4o",
     input: [
       {
         role: "user",
