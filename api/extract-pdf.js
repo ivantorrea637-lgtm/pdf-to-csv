@@ -1,6 +1,6 @@
-import OpenAI from "openai";
 import formidable from "formidable";
 import fs from "fs";
+import pdf from "pdf-parse";
 
 export const config = {
   api: {
@@ -14,32 +14,6 @@ const EXCLUDED = [
   "PG DISTRIBUTION",
   "PALOS GARZA FORWARDING",
 ];
-
-function normalizeRows(rows) {
-  if (!Array.isArray(rows)) return [];
-
-  return rows.map((row) => ({
-    factura: String(row?.factura || "").trim(),
-    referencia: String(row?.referencia || "").trim(),
-    importe: String(row?.importe || "").replace(/[$,\s]/g, "").trim(),
-    concepto: String(row?.concepto || "").trim(),
-  }));
-}
-
-function extractJsonArray(text) {
-  const clean = String(text || "").replace(/```json|```/gi, "").trim();
-
-  try {
-    return normalizeRows(JSON.parse(clean));
-  } catch {
-    const start = clean.indexOf("[");
-    const end = clean.lastIndexOf("]");
-    if (start !== -1 && end !== -1 && end > start) {
-      return normalizeRows(JSON.parse(clean.slice(start, end + 1)));
-    }
-    throw new Error("La respuesta no vino en JSON válido.");
-  }
-}
 
 function parseForm(req) {
   const form = formidable({
@@ -55,86 +29,73 @@ function parseForm(req) {
   });
 }
 
-async function uploadPdfToOpenAI(client, filePath) {
-  return await client.files.create({
-    file: fs.createReadStream(filePath),
-    purpose: "user_data",
-  });
+function cleanText(text) {
+  return String(text || "")
+    .replace(/\r/g, "")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{2,}/g, "\n")
+    .trim();
 }
 
-async function extractWithOpenAI(client, fileId, fileName) {
-  const prompt = `Analiza este PDF de facturas.
+function normalizeConcept(value) {
+  const concept = String(value || "").replace(/\s+/g, " ").trim();
+  if (!concept) return "";
 
-IMPORTANTE:
-- Cada página contiene UNA factura.
-- Debes leer cada página por separado.
-- Extrae una fila por cada página.
+  const upper = concept.toUpperCase();
+  const excluded = EXCLUDED.some((name) => upper.includes(name));
+  if (excluded) return "";
 
-Devuelve un array JSON con este formato exacto:
-[
-  {
-    "factura": "19681",
-    "referencia": "PG14490/26",
-    "importe": "125.00",
-    "concepto": "SUKARNE SA DE CV"
-  }
-]
+  return concept;
+}
 
-Qué extraer:
-- factura: el número que aparece después de "Invoice #"
-- referencia: el valor de "P.O. No." o "REF #"
-- importe: el monto final de Amount o Total, sin signo $
-- concepto: el valor del campo "CLIENTE"
+function extractRowsFromPdfText(rawText) {
+  const text = cleanText(rawText);
 
-Reglas:
-- si referencia no empieza con PG o NL, déjala vacía
-- concepto debe ser empresa o nombre propio
-- ignora estos nombres como concepto: ${EXCLUDED.join(", ")}
+  const invoiceRegex = /Invoice #\s*([A-Z0-9-]+)/gi;
+  const matches = [...text.matchAll(invoiceRegex)];
 
-Responde SOLO con JSON válido.
-No expliques nada.
-No uses markdown.
-No uses texto adicional.
+  if (!matches.length) return [];
 
-Nombre del archivo: ${fileName}`;
+  const sections = matches.map((match, index) => {
+    const start = match.index;
+    const end = index < matches.length - 1 ? matches[index + 1].index : text.length;
+    return text.slice(start, end);
+  });
 
-  let lastError;
+  const rows = sections.map((section) => {
+    const factura =
+      section.match(/Invoice #\s*([A-Z0-9-]+)/i)?.[1]?.trim() || "";
 
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    try {
-      const response = await client.responses.create({
-        model: "gpt-4.1",
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_file",
-                file_id: fileId,
-              },
-              {
-                type: "input_text",
-                text: prompt,
-              },
-            ],
-          },
-        ],
-        max_output_tokens: 2200,
-      });
+    const referencia =
+      section.match(/P\.O\. No\.\s*([A-Z]{2}[A-Z0-9/.-]+)/i)?.[1]?.trim() ||
+      section.match(/REF #\s*:?\s*([A-Z]{2}[A-Z0-9/.-]+)/i)?.[1]?.trim() ||
+      "";
 
-      console.log("OPENAI OUTPUT:", response.output_text || "");
-      return extractJsonArray(response.output_text || "");
-    } catch (error) {
-      lastError = error;
-      console.error(`Intento ${attempt} fallido:`, error?.message || error);
+    const clienteRaw =
+      section.match(/CLIENTE\s*:?\s*([^\n]+)/i)?.[1]?.trim() || "";
 
-      if (attempt < 3) {
-        await new Promise((resolve) => setTimeout(resolve, 2000 * attempt));
-      }
+    const concepto = normalizeConcept(clienteRaw);
+
+    let importe =
+      section.match(/\$([0-9]+(?:\.[0-9]{2})?)/g)?.slice(-1)?.[0]?.replace("$", "") ||
+      "";
+
+    if (!importe) {
+      importe =
+        section.match(/Amount\s*([0-9]+(?:\.[0-9]{2})?)/i)?.[1]?.trim() || "";
     }
-  }
 
-  throw new Error(lastError?.message || "OpenAI falló después de 3 intentos.");
+    return {
+      factura,
+      referencia: /^(PG|NL)/i.test(referencia) ? referencia : "",
+      importe,
+      concepto,
+    };
+  });
+
+  return rows.filter(
+    (row) => row.factura || row.referencia || row.importe || row.concepto
+  );
 }
 
 export default async function handler(req, res) {
@@ -144,17 +105,6 @@ export default async function handler(req, res) {
       error: "Método no permitido.",
     });
   }
-
-  if (!process.env.OPENAI_API_KEY) {
-    return res.status(500).json({
-      ok: false,
-      error: "Falta configurar OPENAI_API_KEY en Vercel.",
-    });
-  }
-
-  const client = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY,
-  });
 
   try {
     const { files } = await parseForm(req);
@@ -185,14 +135,12 @@ export default async function handler(req, res) {
       }
 
       try {
-        const uploaded = await uploadPdfToOpenAI(client, file.filepath);
-        const rows = await extractWithOpenAI(
-          client,
-          uploaded.id,
-          file.originalFilename
-        );
+        const buffer = fs.readFileSync(file.filepath);
+        const data = await pdf(buffer);
+        const rows = extractRowsFromPdfText(data.text);
 
         allRows.push(...rows);
+
         details.push({
           file: file.originalFilename,
           ok: true,
@@ -202,7 +150,7 @@ export default async function handler(req, res) {
         details.push({
           file: file.originalFilename || "archivo",
           ok: false,
-          error: error.message || "Error desconocido al procesar el PDF.",
+          error: error.message || "Error al leer el PDF.",
         });
       }
     }
