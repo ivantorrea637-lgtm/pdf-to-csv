@@ -8,26 +8,36 @@ export const config = {
   },
 };
 
-const EXCLUDED = [
+const EXCLUDED_CONCEPTS = [
   "PG NEXUS",
   "PG INTERNATIONAL",
   "PG DISTRIBUTION",
   "PALOS GARZA FORWARDING",
-  "ARRASTRE",
+  "PALOS GARZA FW",
   "CRUCE",
-  "FLETE",
-  "SERVICIO",
-  "MOVIMIENTO LOCAL",
-  "CRUCE DE IMPORTACION",
-  "CRUCE DE EXPORTACION",
   "IMPORTACION",
   "EXPORTACION",
-  "TRANSFER",
-  "TRASLADO",
-  "CAJA",
-  "PEDTO",
-  "REFERENCIA",
-  "REFERENCE",
+  "ARRASTRE",
+  "FLETE",
+  "SERVICIO",
+  "MOVIMIENTO",
+  "NUEVO LAREDO",
+  "LAREDO TEXAS",
+  "LAREDO, TEXAS",
+  "TOTAL",
+  "DOLARES",
+  "DOLLAR",
+];
+
+const LEGAL_SUFFIXES = [
+  "SA DE CV",
+  "S DE RL DE CV",
+  "SAPI DE CV",
+  "S EN NC DE CV",
+  "INC",
+  "LLC",
+  "CORP",
+  "COMPANY",
 ];
 
 function parseForm(req) {
@@ -52,51 +62,14 @@ function cleanText(text) {
     .trim();
 }
 
-function isExcludedConcept(value) {
-  const upper = String(value || "").toUpperCase().trim();
-  if (!upper) return true;
-  return EXCLUDED.some((word) => upper.includes(word));
-}
-
-function looksLikeCompanyOrPerson(value) {
-  const text = String(value || "").replace(/\s+/g, " ").trim();
-  if (!text) return false;
-
-  const upper = text.toUpperCase();
-
-  if (isExcludedConcept(text)) return false;
-
-  // Razones sociales comunes
-  const companyHints = [
-    "SA DE CV",
-    "S DE RL DE CV",
-    "SAPI DE CV",
-    "S. DE R.L. DE C.V.",
-    "INC",
-    "LLC",
-    "CORP",
-    "COMPANY",
-    "CORPORATION",
-    "LOGISTICS",
-    "TRANSPORT",
-    "TRUCKING",
-  ];
-
-  if (companyHints.some((hint) => upper.includes(hint))) return true;
-
-  // Nombre propio: al menos 2 palabras con letras
-  const words = text.split(" ").filter(Boolean);
-  if (words.length >= 2 && words.every((w) => /[A-Za-zÁÉÍÓÚÑáéíóúñ]/.test(w))) {
-    return true;
-  }
-
-  return false;
-}
-
 function normalizeConcept(value) {
   const text = String(value || "").replace(/\s+/g, " ").trim();
   if (!text) return "";
-  if (!looksLikeCompanyOrPerson(text)) return "";
+
+  const upper = text.toUpperCase();
+
+  if (EXCLUDED_CONCEPTS.some((bad) => upper.includes(bad))) return "";
+
   return text;
 }
 
@@ -110,16 +83,8 @@ function findFirst(text, patterns) {
   return "";
 }
 
-function findBestReference(text) {
-  const matches = [
-    ...text.matchAll(/\b(PG|NL)[A-Z0-9/-]*\b/gi),
-  ].map((m) => m[0].trim());
-
-  return matches[0] || "";
-}
-
-function findBestInvoice(text) {
-  return findFirst(text, [
+function findInvoice(section) {
+  return findFirst(section, [
     /Invoice\s*#\s*([A-Z0-9-]+)/i,
     /Invoice\s*No\.?\s*([A-Z0-9-]+)/i,
     /INVOICE\s*#\s*([A-Z0-9-]+)/i,
@@ -128,77 +93,171 @@ function findBestInvoice(text) {
     /Factura\s*No\.?\s*([A-Z0-9-]+)/i,
     /FACTURA\s*#\s*([A-Z0-9-]+)/i,
     /FACTURA\s*NO\.?\s*([A-Z0-9-]+)/i,
+    /\b(PI ?-?\d{3,6})\b/i,
+    /\b(PG\d{2}-\d{3,6})\b/i,
   ]);
 }
 
-function findBestAmount(text) {
-  const matches = [
-    ...text.matchAll(/\$ ?([0-9]+(?:\.[0-9]{2})?)/g),
-  ].map((m) => m[1]);
+function findReference(section) {
+  const candidates = [
+    ...section.matchAll(/\b(?:PG|NL)[A-Z0-9/-]{4,}\b/gi),
+  ].map((m) => m[0].trim());
 
-  if (matches.length) {
-    return matches[matches.length - 1];
+  return candidates[0] || "";
+}
+
+function findAmount(section) {
+  const moneyMatches = [...section.matchAll(/\$ ?([0-9]+(?:\.[0-9]{2})?)/g)].map(
+    (m) => m[1]
+  );
+
+  if (moneyMatches.length) {
+    return moneyMatches[moneyMatches.length - 1];
   }
 
-  const alt = findFirst(text, [
+  return findFirst(section, [
     /Amount\s*:?\s*([0-9]+(?:\.[0-9]{2})?)/i,
     /Total\s*:?\s*([0-9]+(?:\.[0-9]{2})?)/i,
     /Importe\s*:?\s*([0-9]+(?:\.[0-9]{2})?)/i,
   ]);
-
-  return alt || "";
 }
 
-function findBestConcept(text) {
+function looksLikeLegalEntity(text) {
+  const upper = text.toUpperCase();
+  return LEGAL_SUFFIXES.some((suffix) => upper.includes(suffix));
+}
+
+function extractConceptFromLabeledField(section) {
   const direct = [
-    findFirst(text, [/CLIENTE\s*:?\s*([^\n]+)/i]),
-    findFirst(text, [/CLIENT\s*:?\s*([^\n]+)/i]),
-    findFirst(text, [/CUSTOMER\s*:?\s*([^\n]+)/i]),
-    findFirst(text, [/RAZON SOCIAL\s*:?\s*([^\n]+)/i]),
-    findFirst(text, [/CONCEPTO\s*:?\s*([^\n]+)/i]),
-    findFirst(text, [/DESCRIPCION\s*:?\s*([^\n]+)/i]),
-    findFirst(text, [/DESCRIPTION\s*:?\s*([^\n]+)/i]),
-  ].map(normalizeConcept).filter(Boolean);
-
-  if (direct.length) return direct[0];
-
-  // Buscar líneas candidatas
-  const lines = text
-    .split("\n")
-    .map((line) => line.replace(/\s+/g, " ").trim())
+    findFirst(section, [/CLIENTE\s*:?\s*([^\n]+)/i]),
+    findFirst(section, [/CLIENT\s*:?\s*([^\n]+)/i]),
+    findFirst(section, [/CUSTOMER\s*:?\s*([^\n]+)/i]),
+    findFirst(section, [/CONCEPTO\s*:?\s*([^\n]+)/i]),
+    findFirst(section, [/DESCRIPCION\s*:?\s*([^\n]+)/i]),
+    findFirst(section, [/DESCRIPCIÓN\s*:?\s*([^\n]+)/i]),
+    findFirst(section, [/DESCRIPTION\s*:?\s*([^\n]+)/i]),
+  ]
+    .map(normalizeConcept)
     .filter(Boolean);
 
-  for (const line of lines) {
-    const cleaned = line
-      .replace(/^CLIENTE\s*:?\s*/i, "")
-      .replace(/^CLIENT\s*:?\s*/i, "")
-      .replace(/^CUSTOMER\s*:?\s*/i, "")
-      .replace(/^RAZON SOCIAL\s*:?\s*/i, "")
+  if (direct.length) return direct[0];
+  return "";
+}
+
+function extractConceptFromPIStyle(section) {
+  const lines = cleanText(section)
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const headerIndex = lines.findIndex((line) =>
+    /CLIENTE|CLIENT|CUSTOMER/i.test(line)
+  );
+
+  if (headerIndex === -1) return "";
+
+  for (let i = headerIndex + 1; i < lines.length; i += 1) {
+    const line = lines[i];
+
+    if (/TOTAL/i.test(line)) break;
+    if (!/\$ ?[0-9]+(?:\.[0-9]{2})?/.test(line)) continue;
+
+    // Quitar fecha, caja, referencia, pedimento y monto
+    let candidate = line
+      .replace(/^\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\s+/, "") // fecha
+      .replace(/^[A-Z0-9-]+\s+/, "") // caja
+      .replace(/^(PG|NL)[A-Z0-9/-]+\s+/i, "") // referencia
+      .replace(/^[A-Z0-9-]+\s+/, "") // pedimento
+      .replace(/\$ ?[0-9]+(?:\.[0-9]{2})?.*$/i, "") // monto al final
       .trim();
 
-    const concept = normalizeConcept(cleaned);
+    // Si trae razón social con sufijo legal, cortar hasta el sufijo
+    const suffixRegex =
+      /\b(.+?(?:SA DE CV|S DE RL DE CV|SAPI DE CV|S EN NC DE CV|INC|LLC|CORP|COMPANY))\b/i;
+
+    const suffixMatch = candidate.match(suffixRegex);
+    if (suffixMatch?.[1]) {
+      return normalizeConcept(suffixMatch[1]);
+    }
+
+    // Como fallback, cortar antes de términos operativos típicos
+    candidate = candidate
+      .replace(/\b(ARRASTRE|CRUCE|FLETE|SERVICIO|MOVIMIENTO|ORIGEN|DESTINO)\b.*$/i, "")
+      .trim();
+
+    candidate = normalizeConcept(candidate);
+    if (candidate) return candidate;
+  }
+
+  return "";
+}
+
+function extractConceptFrom7248Style(section) {
+  const lines = cleanText(section)
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  // Busca la línea entre la ruta y el TOTAL
+  const totalIndex = lines.findIndex((line) => /^TOTAL/i.test(line));
+
+  if (totalIndex === -1) return "";
+
+  for (let i = totalIndex - 1; i >= 0; i -= 1) {
+    const line = lines[i];
+
+    if (!line) continue;
+    if (/NUEVO LAREDO|LAREDO TEXAS|LAREDO, TEXAS/i.test(line)) continue;
+    if (/CRUCE|IMPORTACION|EXPORTACION|DESCRIPCION|DESCRIPCIÓN|TOTAL|DOLARES|REMISION/i.test(line))
+      continue;
+
+    const concept = normalizeConcept(line);
     if (concept) return concept;
   }
 
   return "";
 }
 
+function extractConcept(section) {
+  return (
+    extractConceptFromLabeledField(section) ||
+    extractConceptFromPIStyle(section) ||
+    extractConceptFrom7248Style(section) ||
+    ""
+  );
+}
+
 function splitSections(text) {
+  const cleaned = cleanText(text);
+
+  // Formato 4777: varias facturas por "Invoice #"
   const invoiceMatches = [
-    ...text.matchAll(
+    ...cleaned.matchAll(
       /(Invoice\s*#|Invoice\s*No\.?|INVOICE\s*#|INVOICE\s*NO\.?|Factura\s*#|Factura\s*No\.?|FACTURA\s*#|FACTURA\s*NO\.?)\s*[A-Z0-9-]+/gi
     ),
   ];
 
-  if (!invoiceMatches.length) {
-    return [text];
+  if (invoiceMatches.length > 1) {
+    return invoiceMatches.map((match, index) => {
+      const start = match.index;
+      const end =
+        index < invoiceMatches.length - 1 ? invoiceMatches[index + 1].index : cleaned.length;
+      return cleaned.slice(start, end);
+    });
   }
 
-  return invoiceMatches.map((match, index) => {
-    const start = match.index;
-    const end = index < invoiceMatches.length - 1 ? invoiceMatches[index + 1].index : text.length;
-    return text.slice(start, end);
-  });
+  // Formato 7248: páginas repetidas por nombre del emisor
+  const sandraMatches = [...cleaned.matchAll(/SANDRA CECILIA ROMERO LOREDO/gi)];
+  if (sandraMatches.length > 1) {
+    return sandraMatches.map((match, index) => {
+      const start = match.index;
+      const end =
+        index < sandraMatches.length - 1 ? sandraMatches[index + 1].index : cleaned.length;
+      return cleaned.slice(start, end);
+    });
+  }
+
+  return [cleaned];
 }
 
 function extractRowsFromPdfText(rawText) {
@@ -206,10 +265,10 @@ function extractRowsFromPdfText(rawText) {
   const sections = splitSections(text);
 
   const rows = sections.map((section) => {
-    const factura = findBestInvoice(section);
-    const referencia = findBestReference(section);
-    const importe = findBestAmount(section);
-    const concepto = findBestConcept(section);
+    const factura = findInvoice(section);
+    const referencia = findReference(section);
+    const importe = findAmount(section);
+    const concepto = extractConcept(section);
 
     return {
       factura,
@@ -219,9 +278,7 @@ function extractRowsFromPdfText(rawText) {
     };
   });
 
-  return rows.filter((row) =>
-    row.factura || row.referencia || row.importe || row.concepto
-  );
+  return rows.filter((row) => row.factura || row.referencia || row.importe || row.concepto);
 }
 
 export default async function handler(req, res) {
