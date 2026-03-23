@@ -127,7 +127,6 @@ function findFirst(text, patterns) {
 function normalizeReference(raw) {
   let ref = cleanLine(raw).toUpperCase();
 
-  // quitar etiquetas comunes
   ref = ref
     .replace(/^REF(?:ERENCE)?\s*:?\s*/i, "")
     .replace(/^REFERENCIA\s*:?\s*/i, "")
@@ -135,10 +134,8 @@ function normalizeReference(raw) {
     .replace(/^PO\s*NO\.?\s*:?\s*/i, "")
     .trim();
 
-  // quitar espacios internos
   ref = ref.replace(/\s+/g, "");
 
-  // validar formatos
   if (/^PG\d{5}\/\d{2}$/.test(ref)) return ref;
   if (/^NL\d{5}$/.test(ref)) return ref;
 
@@ -160,40 +157,24 @@ function findInvoice(section) {
   ]);
 }
 
-function findReference(section) {
-  const cleanedSection = cleanText(section);
+function findReferenceAnywhere(section) {
+  const cleaned = cleanText(section);
 
-  const candidates = [];
+  const matches = [];
 
-  // 1) buscar etiquetadas
-  const labeledPatterns = [
-    /REF(?:ERENCE)?\s*:?\s*((?:PG\s*\d{5}\s*\/\s*\d{2})|(?:NL\s*\d{5}))/gi,
-    /REFERENCIA\s*:?\s*((?:PG\s*\d{5}\s*\/\s*\d{2})|(?:NL\s*\d{5}))/gi,
-    /P\.?O\.?\s*NO\.?\s*:?\s*((?:PG\s*\d{5}\s*\/\s*\d{2})|(?:NL\s*\d{5}))/gi,
-    /PO\s*NO\.?\s*:?\s*((?:PG\s*\d{5}\s*\/\s*\d{2})|(?:NL\s*\d{5}))/gi,
-  ];
-
-  for (const pattern of labeledPatterns) {
-    for (const match of cleanedSection.matchAll(pattern)) {
-      const ref = normalizeReference(match[1]);
-      if (ref) candidates.push(ref);
-    }
+  // PG con o sin espacios
+  for (const match of cleaned.matchAll(/\bPG\s*\d{5}\s*\/\s*\d{2}\b/gi)) {
+    const ref = normalizeReference(match[0]);
+    if (ref) matches.push(ref);
   }
 
-  // 2) buscar libre en todo el bloque
-  const freePatterns = [
-    /\bPG\s*\d{5}\s*\/\s*\d{2}\b/gi,
-    /\bNL\s*\d{5}\b/gi,
-  ];
-
-  for (const pattern of freePatterns) {
-    for (const match of cleanedSection.matchAll(pattern)) {
-      const ref = normalizeReference(match[0]);
-      if (ref) candidates.push(ref);
-    }
+  // NL con o sin espacios
+  for (const match of cleaned.matchAll(/\bNL\s*\d{5}\b/gi)) {
+    const ref = normalizeReference(match[0]);
+    if (ref) matches.push(ref);
   }
 
-  return candidates[0] || "";
+  return matches[0] || "";
 }
 
 function findAmount(section) {
@@ -319,7 +300,7 @@ function extractRowsFromPdfText(rawText) {
 
   const rows = sections.map((section) => {
     const factura = findInvoice(section);
-    const referencia = findReference(section);
+    const referencia = findReferenceAnywhere(section);
     const importe = findAmount(section);
     const concepto = extractConcept(section);
 
