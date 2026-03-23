@@ -95,7 +95,6 @@ function looksLikeCompanyOrPerson(value) {
 
   if (LEGAL_SUFFIXES.some((suffix) => upper.includes(suffix))) return true;
 
-  // Persona física: dos o más palabras con letras, evitando valores cortos o técnicos
   const words = text.split(" ").filter(Boolean);
   if (
     words.length >= 2 &&
@@ -125,6 +124,27 @@ function findFirst(text, patterns) {
   return "";
 }
 
+function normalizeReference(raw) {
+  let ref = cleanLine(raw).toUpperCase();
+
+  // quitar etiquetas comunes
+  ref = ref
+    .replace(/^REF(?:ERENCE)?\s*:?\s*/i, "")
+    .replace(/^REFERENCIA\s*:?\s*/i, "")
+    .replace(/^P\.?O\.?\s*NO\.?\s*:?\s*/i, "")
+    .replace(/^PO\s*NO\.?\s*:?\s*/i, "")
+    .trim();
+
+  // quitar espacios internos
+  ref = ref.replace(/\s+/g, "");
+
+  // validar formatos
+  if (/^PG\d{5}\/\d{2}$/.test(ref)) return ref;
+  if (/^NL\d{5}$/.test(ref)) return ref;
+
+  return "";
+}
+
 function findInvoice(section) {
   return findFirst(section, [
     /Invoice\s*#\s*([A-Z0-9-]+)/i,
@@ -141,11 +161,39 @@ function findInvoice(section) {
 }
 
 function findReference(section) {
-  const matches = [
-    ...section.matchAll(/\b(?:PG\d{5}\/\d{2}|NL\d{5})\b/gi),
-  ].map((m) => cleanLine(m[0]));
+  const cleanedSection = cleanText(section);
 
-  return matches[0] || "";
+  const candidates = [];
+
+  // 1) buscar etiquetadas
+  const labeledPatterns = [
+    /REF(?:ERENCE)?\s*:?\s*((?:PG\s*\d{5}\s*\/\s*\d{2})|(?:NL\s*\d{5}))/gi,
+    /REFERENCIA\s*:?\s*((?:PG\s*\d{5}\s*\/\s*\d{2})|(?:NL\s*\d{5}))/gi,
+    /P\.?O\.?\s*NO\.?\s*:?\s*((?:PG\s*\d{5}\s*\/\s*\d{2})|(?:NL\s*\d{5}))/gi,
+    /PO\s*NO\.?\s*:?\s*((?:PG\s*\d{5}\s*\/\s*\d{2})|(?:NL\s*\d{5}))/gi,
+  ];
+
+  for (const pattern of labeledPatterns) {
+    for (const match of cleanedSection.matchAll(pattern)) {
+      const ref = normalizeReference(match[1]);
+      if (ref) candidates.push(ref);
+    }
+  }
+
+  // 2) buscar libre en todo el bloque
+  const freePatterns = [
+    /\bPG\s*\d{5}\s*\/\s*\d{2}\b/gi,
+    /\bNL\s*\d{5}\b/gi,
+  ];
+
+  for (const pattern of freePatterns) {
+    for (const match of cleanedSection.matchAll(pattern)) {
+      const ref = normalizeReference(match[0]);
+      if (ref) candidates.push(ref);
+    }
+  }
+
+  return candidates[0] || "";
 }
 
 function findAmount(section) {
@@ -209,7 +257,6 @@ function extractConceptFromColumns(section) {
     if (/^TOTAL\b/i.test(line)) break;
     if (/^\$ ?[0-9]/.test(line)) continue;
 
-    // intenta aislar razón social con sufijos legales
     const suffixMatch = line.match(
       /\b(.+?(?:SA DE CV|S DE RL DE CV|SAPI DE CV|S EN NC DE CV|SC|AC|INC|LLC|CORP|COMPANY))\b/i
     );
@@ -218,9 +265,8 @@ function extractConceptFromColumns(section) {
       if (concept) return concept;
     }
 
-    // limpiar pedazos operativos comunes
     line = line
-      .replace(/\b(?:PG\d{5}\/\d{2}|NL\d{5})\b/gi, "")
+      .replace(/\b(?:PG\s*\d{5}\s*\/\s*\d{2}|NL\s*\d{5})\b/gi, "")
       .replace(/\$ ?[0-9]+(?:\.[0-9]{2})?/g, "")
       .replace(/\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b/g, "")
       .replace(/\b\d{4,}\b/g, "")
@@ -279,9 +325,7 @@ function extractRowsFromPdfText(rawText) {
 
     return {
       factura,
-      referencia: /^(PG\d{5}\/\d{2}|NL\d{5})$/i.test(referencia)
-        ? referencia
-        : "",
+      referencia,
       importe,
       concepto,
     };
