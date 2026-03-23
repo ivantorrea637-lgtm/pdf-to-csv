@@ -11,23 +11,32 @@
         margin: 0 auto;
         padding: 24px;
       }
+
       button {
         padding: 10px 14px;
         margin-right: 10px;
         cursor: pointer;
       }
+
       table {
         width: 100%;
         border-collapse: collapse;
         margin-top: 20px;
       }
+
       th, td {
         border: 1px solid #ccc;
         padding: 8px;
         text-align: left;
       }
+
       .error {
         color: red;
+        white-space: pre-line;
+      }
+
+      .status {
+        white-space: pre-line;
       }
     </style>
   </head>
@@ -40,11 +49,12 @@
     <button onclick="document.getElementById('fileInput').click()">
       Subir PDFs
     </button>
+
     <button onclick="downloadCSV()" id="downloadBtn" disabled>
       Descargar CSV
     </button>
 
-    <p id="status"></p>
+    <p id="status" class="status"></p>
     <p id="error" class="error"></p>
     <div id="files"></div>
 
@@ -84,27 +94,39 @@
             body: formData
           });
 
-        const raw = await res.text();
+          const raw = await res.text();
 
-let data;
-try {
-  data = JSON.parse(raw);
-} catch {
-  throw new Error(raw || "El servidor devolvió una respuesta inválida.");
-}
+          let data;
+          try {
+            data = JSON.parse(raw);
+          } catch {
+            throw new Error(raw || "El servidor devolvió una respuesta inválida.");
+          }
 
-if (!res.ok || !data.ok) {
-  throw new Error(data.error || "Error procesando PDFs");
-}
+          if (!res.ok || !data.ok) {
+            throw new Error(data.error || "Error procesando PDFs");
+          }
+
           extractedRows = data.rows || [];
           renderTable(extractedRows);
 
           document.getElementById("downloadBtn").disabled = extractedRows.length === 0;
-          document.getElementById("status").textContent =
-            `Listo. Registros extraídos: ${extractedRows.length}`;
+
+          let msg = `Listo. Registros extraídos: ${extractedRows.length}`;
+
+          if (data.details && data.details.length) {
+            msg += "\n\nDetalles:\n" + data.details.map(d =>
+              `${d.file}: ${d.ok ? `${d.rows} fila(s)` : `ERROR - ${d.error}`}`
+            ).join("\n");
+          }
+
+          document.getElementById("status").textContent = msg;
         } catch (err) {
           document.getElementById("error").textContent = err.message || "Error inesperado";
           document.getElementById("status").textContent = "";
+          extractedRows = [];
+          renderTable([]);
+          document.getElementById("downloadBtn").disabled = true;
         }
       });
 
