@@ -1,28 +1,144 @@
 <!doctype html>
-<html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PDF → CSV</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 24px;
+      }
+      button {
+        padding: 10px 14px;
+        margin-right: 10px;
+        cursor: pointer;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 20px;
+      }
+      th, td {
+        border: 1px solid #ccc;
+        padding: 8px;
+        text-align: left;
+      }
+      .error {
+        color: red;
+      }
+    </style>
+  </head>
   <body>
-    <h1>PDF → CSV</h1>
-    <input type="file" id="file" multiple />
-    <button onclick="upload()">Procesar</button>
+    <h1>📄 PDF → CSV</h1>
+    <p>Sube uno o varios PDFs y genera el archivo SUBIR_CR.csv</p>
+
+    <input type="file" id="fileInput" accept="application/pdf" multiple hidden />
+
+    <button onclick="document.getElementById('fileInput').click()">
+      Subir PDFs
+    </button>
+    <button onclick="downloadCSV()" id="downloadBtn" disabled>
+      Descargar CSV
+    </button>
+
+    <p id="status"></p>
+    <p id="error" class="error"></p>
+    <div id="files"></div>
+
+    <table id="table" style="display:none;">
+      <thead>
+        <tr>
+          <th>FACTURA</th>
+          <th>REFERENCIA</th>
+          <th>IMPORTE</th>
+          <th>CONCEPTO</th>
+        </tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
 
     <script>
-      async function upload() {
-        const files = document.getElementById("file").files;
+      let extractedRows = [];
+
+      document.getElementById("fileInput").addEventListener("change", async (e) => {
+        const files = Array.from(e.target.files || []).filter(
+          f => f.type === "application/pdf"
+        );
+
+        if (!files.length) return;
+
+        document.getElementById("error").textContent = "";
+        document.getElementById("status").textContent = `Procesando ${files.length} PDF(s)...`;
+        document.getElementById("files").innerHTML =
+          "<b>Archivos:</b><br>" + files.map(f => "• " + f.name).join("<br>");
+
         const formData = new FormData();
+        files.forEach(file => formData.append("files", file));
 
-        for (let f of files) {
-          formData.append("files", f);
+        try {
+          const res = await fetch("/api/extract-pdf", {
+            method: "POST",
+            body: formData
+          });
+
+          const data = await res.json();
+
+          if (!res.ok || !data.ok) {
+            throw new Error(data.error || "Error procesando PDFs");
+          }
+
+          extractedRows = data.rows || [];
+          renderTable(extractedRows);
+
+          document.getElementById("downloadBtn").disabled = extractedRows.length === 0;
+          document.getElementById("status").textContent =
+            `Listo. Registros extraídos: ${extractedRows.length}`;
+        } catch (err) {
+          document.getElementById("error").textContent = err.message || "Error inesperado";
+          document.getElementById("status").textContent = "";
         }
+      });
 
-        const res = await fetch("/api/extract-pdf", {
-          method: "POST",
-          body: formData
+      function renderTable(rows) {
+        const tbody = document.getElementById("tbody");
+        const table = document.getElementById("table");
+        tbody.innerHTML = "";
+
+        rows.forEach(r => {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td>${r.factura || ""}</td>
+            <td>${r.referencia || ""}</td>
+            <td>${r.importe || ""}</td>
+            <td>${r.concepto || ""}</td>
+          `;
+          tbody.appendChild(tr);
         });
 
-        const data = await res.json();
+        table.style.display = rows.length ? "table" : "none";
+      }
 
-        console.log(data);
-        alert("Listo. Revisa consola o descarga CSV.");
+      function downloadCSV() {
+        if (!extractedRows.length) return;
+
+        const header = "FACTURA,REFERENCIA,IMPORTE,CONCEPTO";
+        const lines = extractedRows.map(r =>
+          `"${String(r.factura || "").replaceAll('"', '""')}","${String(r.referencia || "").replaceAll('"', '""')}","${String(r.importe || "").replaceAll('"', '""')}","${String(r.concepto || "").replaceAll('"', '""')}"`
+        );
+
+        const csv = "\uFEFF" + [header, ...lines].join("\r\n");
+        const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "SUBIR_CR.csv";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
       }
     </script>
   </body>
