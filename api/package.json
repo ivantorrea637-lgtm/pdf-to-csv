@@ -3,6 +3,6 @@
   "private": true,
   "dependencies": {
     "formidable": "^3.5.1",
-    "openai": "^4.104.0"
+    "pdf-parse": "^1.1.1"
   }
 }
