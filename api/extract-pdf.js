@@ -8,9 +8,6 @@ export const config = {
   },
 };
 
-const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
 
 const EXCLUDED = [
   "PG NEXUS",
@@ -55,14 +52,18 @@ function parseForm(req) {
   });
 }
 
-async function uploadPdfToOpenAI(filePath, fileName) {
+async function uploadPdfToOpenAI(client, filePath, fileName) {
   return await client.files.create({
     file: fs.createReadStream(filePath),
     purpose: "user_data",
   });
 }
 
-async function extractWithOpenAI(fileId, fileName) {
+const client = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
+async function extractWithOpenAI(client, fileId, fileName) {
   const prompt = `Eres un extractor de datos de facturas de transporte.
 
 Cada página del PDF contiene UNA factura.
@@ -158,9 +159,9 @@ export default async function handler(req, res) {
       }
 
       try {
-        const uploaded = await uploadPdfToOpenAI(file.filepath, file.originalFilename);
-        const rows = await extractWithOpenAI(uploaded.id, file.originalFilename);
-
+        const uploaded = await uploadPdfToOpenAI(client, file.filepath, file.originalFilename);
+        const rows = await extractWithOpenAI(client, uploaded.id, file.originalFilename);
+        
         allRows.push(...rows);
         details.push({
           file: file.originalFilename,
