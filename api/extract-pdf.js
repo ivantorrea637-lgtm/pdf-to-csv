@@ -8,7 +8,6 @@ export const config = {
   },
 };
 
-
 const EXCLUDED = [
   "PG NEXUS",
   "PG INTERNATIONAL",
@@ -18,6 +17,7 @@ const EXCLUDED = [
 
 function normalizeRows(rows) {
   if (!Array.isArray(rows)) return [];
+
   return rows.map((row) => ({
     factura: String(row?.factura || "").trim(),
     referencia: String(row?.referencia || "").trim(),
@@ -52,37 +52,22 @@ function parseForm(req) {
   });
 }
 
-async function uploadPdfToOpenAI(client, filePath, fileName) {
+async function uploadPdfToOpenAI(client, filePath) {
   return await client.files.create({
     file: fs.createReadStream(filePath),
     purpose: "user_data",
   });
 }
 
-const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
-
 async function extractWithOpenAI(client, fileId, fileName) {
-  const prompt = `Eres un extractor de datos de facturas de transporte.
+  const prompt = `Analiza este PDF de facturas.
 
-Cada página del PDF contiene UNA factura.
+IMPORTANTE:
+- Cada página contiene UNA factura.
+- Debes leer cada página por separado.
+- Extrae una fila por cada página.
 
-Extrae EXACTAMENTE:
-- factura: número después de "Invoice #"
-- referencia: valor de "P.O. No." o "REF #"
-- importe: el monto final (Amount o Total)
-- concepto: valor del campo "CLIENTE"
-
-Reglas:
-- referencia SOLO si empieza con PG o NL
-- importe sin $ ni comas
-- concepto debe ser razón social o nombre propio
-- ignora estos nombres si aparecen como concepto: ${EXCLUDED.join(", ")}
-
-Responde SOLO con un array JSON válido, sin markdown, sin explicación.
-
-Ejemplo:
+Devuelve un array JSON con este formato exacto:
 [
   {
     "factura": "19681",
@@ -91,6 +76,22 @@ Ejemplo:
     "concepto": "SUKARNE SA DE CV"
   }
 ]
+
+Qué extraer:
+- factura: el número que aparece después de "Invoice #"
+- referencia: el valor de "P.O. No." o "REF #"
+- importe: el monto final de Amount o Total, sin signo $
+- concepto: el valor del campo "CLIENTE"
+
+Reglas:
+- si referencia no empieza con PG o NL, déjala vacía
+- concepto debe ser empresa o nombre propio
+- ignora estos nombres como concepto: ${EXCLUDED.join(", ")}
+
+Responde SOLO con JSON válido.
+No expliques nada.
+No uses markdown.
+No uses texto adicional.
 
 Nombre del archivo: ${fileName}`;
 
@@ -115,12 +116,17 @@ Nombre del archivo: ${fileName}`;
     max_output_tokens: 2200,
   });
 
+  console.log("OPENAI OUTPUT:", response.output_text || "");
+
   return extractJsonArray(response.output_text || "");
 }
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
-    return res.status(405).json({ ok: false, error: "Método no permitido." });
+    return res.status(405).json({
+      ok: false,
+      error: "Método no permitido.",
+    });
   }
 
   if (!process.env.OPENAI_API_KEY) {
@@ -129,6 +135,10 @@ export default async function handler(req, res) {
       error: "Falta configurar OPENAI_API_KEY en Vercel.",
     });
   }
+
+  const client = new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY,
+  });
 
   try {
     const { files } = await parseForm(req);
@@ -159,9 +169,13 @@ export default async function handler(req, res) {
       }
 
       try {
-        const uploaded = await uploadPdfToOpenAI(client, file.filepath, file.originalFilename);
-        const rows = await extractWithOpenAI(client, uploaded.id, file.originalFilename);
-        
+        const uploaded = await uploadPdfToOpenAI(client, file.filepath);
+        const rows = await extractWithOpenAI(
+          client,
+          uploaded.id,
+          file.originalFilename
+        );
+
         allRows.push(...rows);
         details.push({
           file: file.originalFilename,
