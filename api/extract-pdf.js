@@ -42,60 +42,147 @@ function normalizeConcept(value) {
   if (!concept) return "";
 
   const upper = concept.toUpperCase();
-  const excluded = EXCLUDED.some((name) => upper.includes(name));
-  if (excluded) return "";
+  if (EXCLUDED.some((name) => upper.includes(name))) return "";
 
   return concept;
+}
+
+function findFirst(section, patterns) {
+  for (const pattern of patterns) {
+    const match = section.match(pattern);
+    if (match?.[1]) return match[1].trim();
+  }
+  return "";
 }
 
 function extractRowsFromPdfText(rawText) {
   const text = cleanText(rawText);
 
-  const invoiceRegex = /Invoice #\s*([A-Z0-9-]+)/gi;
-  const matches = [...text.matchAll(invoiceRegex)];
+  const invoiceMatches = [
+    ...text.matchAll(
+      /(Invoice #|Invoice No\.?|INVOICE #|INVOICE NO\.?|Factura #|Factura No\.?)\s*([A-Z0-9-]+)/gi
+    ),
+  ];
 
-  if (!matches.length) return [];
+  // Si encuentra varias facturas, corta por secciones
+  if (invoiceMatches.length > 0) {
+    const sections = invoiceMatches.map((match, index) => {
+      const start = match.index;
+      const end =
+        index < invoiceMatches.length - 1 ? invoiceMatches[index + 1].index : text.length;
+      return text.slice(start, end);
+    });
 
-  const sections = matches.map((match, index) => {
-    const start = match.index;
-    const end = index < matches.length - 1 ? matches[index + 1].index : text.length;
-    return text.slice(start, end);
-  });
+    const rows = sections.map((section) => {
+      const factura = findFirst(section, [
+        /Invoice #\s*([A-Z0-9-]+)/i,
+        /Invoice No\.?\s*([A-Z0-9-]+)/i,
+        /INVOICE #\s*([A-Z0-9-]+)/i,
+        /INVOICE NO\.?\s*([A-Z0-9-]+)/i,
+        /Factura #\s*([A-Z0-9-]+)/i,
+        /Factura No\.?\s*([A-Z0-9-]+)/i,
+      ]);
 
-  const rows = sections.map((section) => {
-    const factura =
-      section.match(/Invoice #\s*([A-Z0-9-]+)/i)?.[1]?.trim() || "";
+      const referencia = findFirst(section, [
+        /P\.O\. No\.?\s*([A-Z]{2}[A-Z0-9/.-]+)/i,
+        /PO No\.?\s*([A-Z]{2}[A-Z0-9/.-]+)/i,
+        /REF #\s*:?\s*([A-Z]{2}[A-Z0-9/.-]+)/i,
+        /REFERENCE\s*:?\s*([A-Z]{2}[A-Z0-9/.-]+)/i,
+        /REFERENCIA\s*:?\s*([A-Z]{2}[A-Z0-9/.-]+)/i,
+      ]);
 
-    const referencia =
-      section.match(/P\.O\. No\.\s*([A-Z]{2}[A-Z0-9/.-]+)/i)?.[1]?.trim() ||
-      section.match(/REF #\s*:?\s*([A-Z]{2}[A-Z0-9/.-]+)/i)?.[1]?.trim() ||
-      "";
+      const clienteRaw = findFirst(section, [
+        /CLIENTE\s*:?\s*([^\n]+)/i,
+        /CLIENT\s*:?\s*([^\n]+)/i,
+        /CUSTOMER\s*:?\s*([^\n]+)/i,
+        /RAZON SOCIAL\s*:?\s*([^\n]+)/i,
+      ]);
 
-    const clienteRaw =
-      section.match(/CLIENTE\s*:?\s*([^\n]+)/i)?.[1]?.trim() || "";
+      const concepto = normalizeConcept(clienteRaw);
 
-    const concepto = normalizeConcept(clienteRaw);
+      let importe = "";
 
-    let importe =
-      section.match(/\$([0-9]+(?:\.[0-9]{2})?)/g)?.slice(-1)?.[0]?.replace("$", "") ||
-      "";
+      const moneyMatches = [...section.matchAll(/\$ ?([0-9]+(?:\.[0-9]{2})?)/g)];
+      if (moneyMatches.length) {
+        importe = moneyMatches[moneyMatches.length - 1][1];
+      }
 
-    if (!importe) {
-      importe =
-        section.match(/Amount\s*([0-9]+(?:\.[0-9]{2})?)/i)?.[1]?.trim() || "";
-    }
+      if (!importe) {
+        importe = findFirst(section, [
+          /Amount\s*([0-9]+(?:\.[0-9]{2})?)/i,
+          /Total\s*([0-9]+(?:\.[0-9]{2})?)/i,
+          /Importe\s*([0-9]+(?:\.[0-9]{2})?)/i,
+        ]);
+      }
 
-    return {
-      factura,
-      referencia: /^(PG|NL)/i.test(referencia) ? referencia : "",
-      importe,
-      concepto,
-    };
-  });
+      return {
+        factura,
+        referencia: /^(PG|NL)/i.test(referencia) ? referencia : "",
+        importe,
+        concepto,
+      };
+    });
 
-  return rows.filter(
-    (row) => row.factura || row.referencia || row.importe || row.concepto
+    return rows.filter(
+      (row) => row.factura || row.referencia || row.importe || row.concepto
+    );
+  }
+
+  // Si no detecta varias facturas, intenta sacar una sola
+  const singleRow = {
+    factura: findFirst(text, [
+      /Invoice #\s*([A-Z0-9-]+)/i,
+      /Invoice No\.?\s*([A-Z0-9-]+)/i,
+      /INVOICE #\s*([A-Z0-9-]+)/i,
+      /INVOICE NO\.?\s*([A-Z0-9-]+)/i,
+      /Factura #\s*([A-Z0-9-]+)/i,
+      /Factura No\.?\s*([A-Z0-9-]+)/i,
+    ]),
+    referencia: "",
+    importe: "",
+    concepto: "",
+  };
+
+  const ref = findFirst(text, [
+    /P\.O\. No\.?\s*([A-Z]{2}[A-Z0-9/.-]+)/i,
+    /PO No\.?\s*([A-Z]{2}[A-Z0-9/.-]+)/i,
+    /REF #\s*:?\s*([A-Z]{2}[A-Z0-9/.-]+)/i,
+    /REFERENCE\s*:?\s*([A-Z]{2}[A-Z0-9/.-]+)/i,
+    /REFERENCIA\s*:?\s*([A-Z]{2}[A-Z0-9/.-]+)/i,
+  ]);
+
+  singleRow.referencia = /^(PG|NL)/i.test(ref) ? ref : "";
+
+  singleRow.concepto = normalizeConcept(
+    findFirst(text, [
+      /CLIENTE\s*:?\s*([^\n]+)/i,
+      /CLIENT\s*:?\s*([^\n]+)/i,
+      /CUSTOMER\s*:?\s*([^\n]+)/i,
+      /RAZON SOCIAL\s*:?\s*([^\n]+)/i,
+    ])
   );
+
+  const moneyMatches = [...text.matchAll(/\$ ?([0-9]+(?:\.[0-9]{2})?)/g)];
+  if (moneyMatches.length) {
+    singleRow.importe = moneyMatches[moneyMatches.length - 1][1];
+  } else {
+    singleRow.importe = findFirst(text, [
+      /Amount\s*([0-9]+(?:\.[0-9]{2})?)/i,
+      /Total\s*([0-9]+(?:\.[0-9]{2})?)/i,
+      /Importe\s*([0-9]+(?:\.[0-9]{2})?)/i,
+    ]);
+  }
+
+  if (
+    singleRow.factura ||
+    singleRow.referencia ||
+    singleRow.importe ||
+    singleRow.concepto
+  ) {
+    return [singleRow];
+  }
+
+  return [];
 }
 
 export default async function handler(req, res) {
@@ -137,7 +224,8 @@ export default async function handler(req, res) {
       try {
         const buffer = fs.readFileSync(file.filepath);
         const data = await pdf(buffer);
-        const rows = extractRowsFromPdfText(data.text);
+        const rawText = data.text || "";
+        const rows = extractRowsFromPdfText(rawText);
 
         allRows.push(...rows);
 
@@ -145,6 +233,7 @@ export default async function handler(req, res) {
           file: file.originalFilename,
           ok: true,
           rows: rows.length,
+          preview: cleanText(rawText).slice(0, 400),
         });
       } catch (error) {
         details.push({
